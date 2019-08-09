@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM App to send messages coming through an MQTT topic to an SQL database.
+
+Parameters:
+  01SERVER:
+    Description: Database location, via IP or FQN
+    Type: String
+  02PORT:
+    Description: Port on which the database is accessible.
+    Type: String
+  03DATABASE:
+    Description: Database name
+    Type: String
+  04DRIVER:
+    Description: "Database driver, can be one of the following: 'mssql', 'mysql', 'pg', 'oracle', 'sqlite' or 'websql'"
+    Type: String
+    AllowedPattern: "mysql|mssql|pg|oracle|sqlite|websql"
+  05ACCOUNT:
+    Description: Name of an account that has read privileges to the database.
+    Type: String
+  06PASSWORD:
+    Description: The password for ACCOUNT above.
+    Type: String
+    NoEcho: true
+  07TABLE:
+    Description: The table to save the data to
+    Type: String
+  08TOPIC:
+    Description: MQTT topic on which to listen
+    Type: String
+
+Globals:
+  Function:
+    Timeout: 10
+
+Resources:
+  
+  SQSQueue:
+    Type: AWS::SQS::Queue
+
+  SQS2SQLFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: SQS2SQL
+      Handler: index.handler
+      Runtime: nodejs10.x
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SQSQueue.Arn
+            BatchSize: 10
+      Environment:
+        Variables:
+          SERVER: !Sub '${01SERVER}'
+          PORT: !Sub '${02PORT}'
+          DATABASE: !Sub '${03DATABASE}'
+          DRIVER: !Sub '${04DRIVER}'
+          ACCOUNT: !Sub '${05ACCOUNT}'
+          PASSWORD: !Sub '${06PASSWORD}'
+          TABLE: !Sub '${07TABLE}'
+
+  SQSManagedPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Sid: AllowAllUsersToListAccounts
+              Effect: Allow
+              Action:
+                - sqs:*
+              Resource: "*"
+
+  MQTT2SQSRole: 
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service: "iot.amazonaws.com"
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref SQSManagedPolicy
+            
+
+  MQTT2SQSRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: "true"
+        Sql: !Sub >-
+          SELECT encode(*, 'base64') AS data, timestamp() AS timestamp, topic() as topic from '${08TOPIC}'
+        Actions:
+          -
+            Sqs:
+              QueueUrl: !Ref SQSQueue
+              RoleArn: !GetAtt MQTT2SQSRole.Arn
+
+
+Outputs:
+  SQSQueue:
+    Description: "Buffer for MQTT messages "
+    Value: !GetAtt SQSQueue.Arn
+  SQS2SQLFunction:
+    Description: "SQS2SQL Lambda function ARN"
+    Value: !GetAtt SQS2SQLFunction.Arn
+  SQS2SQLFunctionIamRole:
+    Description: "Implicit IAM Role created for SQS2SQL function"
+    Value: !GetAtt SQS2SQLFunctionRole.Arn
+  MQTT2SQSRule:
+    Description: "IoT rule to capture MQTT messages published on a topic and send them through the SQS"
+    Value: !GetAtt MQTT2SQSRule.Arn
+  MQTT2SQSRole:
+    Description: "IAM Role for IoT rule to access SQS queues"
+    Value: !GetAtt MQTT2SQSRole.Arn
