@@ -42,7 +42,7 @@ Resources:
   SQS2SQLFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: SQS2SQL
+      CodeUri: s3://rev11-mqtt2sql/SQS2SQL.zip
       Handler: index.handler
       Runtime: nodejs10.x
       Events:
